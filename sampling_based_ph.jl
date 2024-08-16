@@ -6,7 +6,7 @@ const MAX_ITER = 500
 n_samples(iter::Int) = 1000 + 10 * iter
 
 # true if the sample is solved for the first timis_first_solve = fill(true, MAX_SAMPLE)
-is_first_solve = fill(true, MAX_SAMPLE)
+const is_first_solve = fill(true, MAX_SAMPLE)
 
 function sample_based_ph()
 
