@@ -4,39 +4,32 @@ include("smps_tim.jl")
 include("smps_sto.jl")
 include("ph_helper.jl")
 
-using JuMP, CPLEX, MathOptInterface
-const optimizer = CPLEX.Optimizer
+using JuMP, Gurobi, MathOptInterface
+const optimizer = Gurobi.Optimizer
 const MOI = MathOptInterface
 const MAX_SAMPLE = 1000000
 const N_WORKERS = Threads.nthreads()
-
-struct spProblem
-    cor::spCorType
-    tim::spImplicitTimType
-    sto::spStoType
-end
 
 # Load smps cor, tim, sto files
 const cor = read_cor("spInput/$(instance_name)/$(instance_name).cor")
 const tim = read_implicit_tim("spInput/$(instance_name)/$(instance_name).tim")
 const sto = read_sto("spInput/$(instance_name)/$(instance_name).sto")
 
-const prob = spProblem(cor, tim, sto)
-
 # Define resources
-rng = MersenneTwister()  # rng
+rng = MersenneTwister(42)  # rng
 
 const model = JuMP.read_from_file("spInput/$(instance_name)/$(instance_name).cor"; format = MathOptInterface.FileFormats.FORMAT_MPS) # main model
 const first_stage_var_names = name.(get_first_stage_vars(model, tim)) # var names
-const scenario_lambda = zeros(length(first_stage_var_names), MAX_SAMPLE) # dual values
-const scenario_x = zeros(length(first_stage_var_names), MAX_SAMPLE) # primal values
+const first_stage_var_length = length(first_stage_var_names) # var length
+const scenario_lambda = zeros(first_stage_var_length, MAX_SAMPLE) # dual values
+const scenario_x = zeros(first_stage_var_length, MAX_SAMPLE) # primal values
 const model_copies = Vector{Model}(undef, N_WORKERS) # model resources
 const first_stage_variables = Vector{Vector{VariableRef}}(undef, N_WORKERS) # first stage variables for each worker
 const original_objective = Vector{AffExpr}(undef, N_WORKERS) # original objective functions for each worker
 const scenario_objective_value = Vector{Float64}(undef, MAX_SAMPLE) # objective values
-const conjugate_direction = zeros(length(first_stage_var_names), MAX_SAMPLE) # conjugate direction
+const conjugate_direction = zeros(first_stage_var_length, MAX_SAMPLE) # conjugate direction
 
-const x_bar = zeros(length(first_stage_var_names)) # consensus solution
+const x_bar = zeros(first_stage_var_length) # consensus solution
 
 const random_vectors = Vector{Float64}[] # random vectors
 
@@ -72,7 +65,7 @@ for i in 1:N_WORKERS
     set_objective(model_copies[i], MIN_SENSE, obj_expr)
 
     # Set the model to single threaded mode
-    set_optimizer_attribute(model_copies[i], "CPX_PARAM_THREADS", 1)
+    set_optimizer_attribute(model_copies[i], "THREADS", 1)
     set_silent(model_copies[i])
 
 end
@@ -154,3 +147,26 @@ function solve_subproblems(
 
 end
 
+function get_average_objective_value(sample_index_set::Union{Vector{Int64}, UnitRange{Int64}})::Float64
+    """
+    Get the average dual objective value of the samples in sample_index_set.
+    """
+
+    s::Float64 = 0.0
+    for i in sample_index_set
+        s += scenario_objective_value[i]
+    end
+    return s / length(sample_index_set)
+end
+
+function calculate_x_bar(sample_index_set::Union{Vector{Int64}, UnitRange{Int64}})
+    """
+    Calculate the consensus solution x_bar using the samples in sample_index_set.
+    """
+    _x_bar = zeros(first_stage_var_length)
+    for i in sample_index_set
+        _x_bar .+= scenario_x[:, i]
+    end
+    _x_bar ./= length(sample_index_set)
+    return _x_bar
+end
